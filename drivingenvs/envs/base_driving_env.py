@@ -4,6 +4,7 @@ from math import pi
 import gym
 import matplotlib.pyplot as plt
 
+from drivingenvs.utils import torch_utils as ptu
 from yarp.envs.base import Env
 
 class BaseDrivingEnv(Env):
@@ -13,7 +14,7 @@ class BaseDrivingEnv(Env):
 	Length from https://mechanicbase.com/cars/average-car-length/
 	Bounds on acceleration and turn rate came from CMU work.
 	"""
-	def __init__(self, veh, distance=1000.0, dt=0.1, lane_width=3.7, n_lanes=3, acc_bounds = (-4, 4), steer_bounds = (-.2618, .2618), gpu=False):
+	def __init__(self, veh, distance=1000.0, dt=0.1, lane_width=3.7, n_lanes=3, acc_bounds = (-4, 4), steer_bounds = (-.2618, .2618), max_steps = 100, start_lane=None, gpu=False):
 		self.gpu = gpu
 		self.max_distance = distance;
 		self.dt = dt
@@ -21,6 +22,7 @@ class BaseDrivingEnv(Env):
 		self.n_lanes = n_lanes
 		self.lane_width = lane_width
 		self.lane_loc = torch.linspace(0, n_lanes*lane_width, n_lanes+1)
+		self.start_lane = start_lane
 
 		#I've left these as tuples so I can use them as args for torch.clamp
 		self.steer_bounds = steer_bounds
@@ -30,12 +32,22 @@ class BaseDrivingEnv(Env):
 		self.ego_state = torch.zeros(4).to(self.device)
 		self.prev_state = self.ego_state.clone()
 		#Gets the state of the vehicle relative to the lane that it's in (this just amounts to changing the y value for straight lanes).
+		self.max_steps = max_steps
+		self.curr_step = None
 
-	def reset(self, init_speed=21.0):
+	def reset(self, init_speed=21.0, lane=None):
 		"""
 		Reset the ego vehicle to the center of a random lane. Initialize the vehicle with the given speed.
 		"""
-		y_pos = self.lane_loc[:-1][torch.randint(self.n_lanes, (1, ))] + self.lane_width/2
+		self.curr_step = torch.tensor(0)
+		if self.start_lane is None:
+			if lane is None:
+				y_pos = self.lane_loc[:-1][torch.randint(self.n_lanes, (1, ))] + self.lane_width/2
+			else:
+				y_pos = self.lane_loc[:-1][lane] + self.lane_width/2
+		else:
+				y_pos = self.lane_loc[:-1][self.start_lane] + self.lane_width/2
+
 		x_pos = 0.0
 		v = init_speed
 		heading = 0.0
@@ -61,6 +73,8 @@ class BaseDrivingEnv(Env):
 		d_state *= self.dt
 		self.ego_state[:-1] += d_state
 
+		self.curr_step += 1
+
 		return self.observation, self.reward, self.terminal, self.info
 
 	@property
@@ -78,11 +92,13 @@ class BaseDrivingEnv(Env):
 		obs = self.observation.shape
 		return gym.spaces.Box(low = np.ones(obs) * -np.inf, high = np.ones(obs) * np.inf)
 
-	def render(self, window = 30):
+	def render(self, fig = None, ax = None, window = 30):
 		"""
 		for visualization. Go window m in either dir from the ego veh.
 		"""
-		fig, ax = plt.subplots()
+		if fig is None or ax is None:
+			fig, ax = plt.subplots()
+
 		ax.set_xlim(self.ego_state[0]-window, self.ego_state[0]+window)
 		ax.set_ylim(self.ego_state[1]-window, self.ego_state[1]+window)
 
@@ -98,7 +114,33 @@ class BaseDrivingEnv(Env):
 		vy = self.ego_state[1] - vw/2
 		ax.add_patch(plt.Rectangle([vx, vy], vl, vw, angle=self.ego_state[2] * (180/pi)))
 
-		plt.show()
+		return fig, ax
+
+	def render_traj(self, traj, fig = None, ax = None, traj_kwargs = {}, window=None):
+		x = traj[:, 0]
+		y = traj[:, 1]
+
+		if fig is None or ax is None:
+			fig, ax = plt.subplots()
+
+		if window:
+			ax.set_xlim(x[0]-window, x[0]+window)
+			ax.set_ylim(y[1]-window, y[1]+window)
+
+		for loc in self.lane_loc[[0, -1]]:
+			ax.axhline(loc.item(), ls='-', c='k')
+			
+		for loc in self.lane_loc[1:-1]:
+			ax.axhline(loc.item(), ls='--', c='k')
+
+		vl = self.veh.shape[0]
+		vw = self.veh.shape[1]
+		#vx = self.ego_state[0] - vl/2
+		#vy = self.ego_state[1] - vw/2
+		ax.add_patch(plt.Rectangle([x[0], y[0]], vl, vw, angle=self.ego_state[2] * (180/pi)))
+		ax.plot(x, y, **traj_kwargs)
+
+		return fig, ax
 
 	def cuda(self):
 		"""
@@ -139,7 +181,8 @@ class BaseDrivingEnv(Env):
 		"""
 		side_term = self.ego_state[1] < self.lane_loc[0] or self.ego_state[1] > self.lane_loc[-1]
 		end_term = self.ego_state[0] > self.max_distance
-		return side_term or end_term
+		time_term = self.curr_step >= self.max_steps
+		return side_term or end_term or time_term
 
 	@property
 	def reward(self):
@@ -150,7 +193,26 @@ class BaseDrivingEnv(Env):
 
 	@property
 	def info(self):
-		return {}
+		return {'state': self.state}
+
+	@property
+	def state(self):
+		"""
+		Unlike observation, contains the complete state of the vehicle (position and velocity)
+		"""
+		return self.ego_state.clone()
+
+	
+	@property
+	def current_lane(self):
+		"""
+		Computing current lane based on Y of the vehicle's centrpoint. If vehicle is out-of-lane, return 1+max_lane_id (going non-negative for one-hot tensor).
+		"""
+		ego_y = self.ego_state[1]
+		if ego_y > self.n_lanes*self.lane_width or ego_y < 0:
+			return torch.tensor(self.n_lanes).to(self.device)
+		else:
+			return (ego_y // self.lane_width).long()
 
 	@property
 	def observation(self):
@@ -168,4 +230,6 @@ class BaseDrivingEnv(Env):
 		far_right_dist = self.ego_state[1] - veh_width/2
 
 		lane_obs = torch.tensor([ll_dist, rl_dist, far_left_dist, far_right_dist]).to(self.device)
-		return torch.cat([ego, lane_obs], dim=0)
+		current_lane = ptu.one_hot(self.current_lane, n_classes = self.n_lanes+1)
+
+		return torch.cat([ego, lane_obs, current_lane], dim=0)
