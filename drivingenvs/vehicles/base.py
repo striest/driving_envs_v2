@@ -50,11 +50,18 @@ class Vehicle(object, metaclass=abc.ABCMeta):
 	def propagate_from_tensor(self, state_tensor, control_tensor):
 		state_dict = {}
 		control_dict = {}
+
 		for k, idx in self.state.items():
-			state_dict[k] = state_tensor[idx]
+			if len(state_tensor.shape) == 1:
+				state_dict[k] = state_tensor[idx]
+			else:
+				state_dict[k] = state_tensor[:, idx]
 
 		for k, idx in self.control.items():
-			control_dict[k] = control_tensor[idx]
+			if len(control_tensor.shape) == 1:
+				control_dict[k] = control_tensor[idx]
+			else:
+				control_dict[k] = control_tensor[:, idx]
 
 		return self.propagate(state_dict, control_dict).to(state_tensor.device)
 
@@ -64,4 +71,4 @@ class Vehicle(object, metaclass=abc.ABCMeta):
 		Given a control vector, return the change in vehicle state.
 		"""
 		pass
-	
+

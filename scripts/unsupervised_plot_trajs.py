@@ -36,9 +36,11 @@ fig, ax = plt.subplots()
 collector =  UnsupervisedSARTSCollector(1.0, env)
 
 for c in range(env.context_dim):
-	traj = collector.collecttrajs(env=env, policy=policy, ntrajs=1, deterministic=False, context=c, reset_kwargs={'lane': args.lane})
+	traj = collector.collecttrajs(env=env, policy=policy, ntrajs=1, deterministic=args.deterministic, context=c, reset_kwargs={'lane': args.lane})
 	states = torch.stack([t['state'] for t in traj['info']])
-	fig, ax = env.render_traj(states, fig=fig, ax=ax, traj_kwargs={'marker':'.', 'label':'context ={}'.format(c)})
+	fig, ax = env.render_traj(states[:50], fig=fig, ax=ax, traj_kwargs={'marker':'.', 'label':'context ={}'.format(c)})
+	if env.wrapped_env.is_colliding:
+		ax.scatter(states[-1, 0], states[-1, 1], c='r', marker = 'X')
 
 if args.legend:
 	plt.legend()

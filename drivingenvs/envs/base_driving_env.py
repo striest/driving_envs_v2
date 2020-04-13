@@ -14,7 +14,7 @@ class BaseDrivingEnv(Env):
 	Length from https://mechanicbase.com/cars/average-car-length/
 	Bounds on acceleration and turn rate came from CMU work.
 	"""
-	def __init__(self, veh, distance=1000.0, dt=0.1, lane_width=3.7, n_lanes=3, acc_bounds = (-4, 4), steer_bounds = (-.2618, .2618), max_steps = 100, start_lane=None, gpu=False):
+	def __init__(self, veh, distance=1000.0, dt=0.1, lane_width=3.7, n_lanes=3, acc_bounds = (-4, 4), steer_bounds = (-.2618, .2618), max_steps = 100, start_lane=None, speed_limit = 25.0, gpu=False):
 		self.gpu = gpu
 		self.max_distance = distance;
 		self.dt = dt
@@ -23,6 +23,7 @@ class BaseDrivingEnv(Env):
 		self.lane_width = lane_width
 		self.lane_loc = torch.linspace(0, n_lanes*lane_width, n_lanes+1)
 		self.start_lane = start_lane
+		self.speed_limit = speed_limit
 
 		#I've left these as tuples so I can use them as args for torch.clamp
 		self.steer_bounds = steer_bounds
@@ -66,8 +67,8 @@ class BaseDrivingEnv(Env):
 		action[1] = action[1].clamp(*self.steer_bounds)
 
 		self.ego_state[3] += action[0]*self.dt
-		turn_angle = action[1]*self.dt
-		control = torch.tensor([self.ego_state[3], turn_angle]).to(self.device)
+		turn_rate = action[1]*self.dt
+		control = torch.tensor([self.ego_state[3], turn_rate]).to(self.device)
 
 		d_state = self.veh.propagate_from_tensor(self.ego_state[:-1], control)
 		d_state *= self.dt
@@ -201,6 +202,15 @@ class BaseDrivingEnv(Env):
 		Unlike observation, contains the complete state of the vehicle (position and velocity)
 		"""
 		return self.ego_state.clone()
+
+	def get_lane(self, vehs):
+		if len(vehs.shape) == 1:
+			return self.get_lane(vehs.unsqueeze(0)).squeeze()
+		else:
+			y = vehs[:, 1]
+			lanes = (y // self.lane_width).long()
+			lanes[(y > self.lane_loc[-1]) | (y < 0)] = self.n_lanes
+			return lanes
 
 	
 	@property

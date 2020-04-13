@@ -42,5 +42,5 @@ class AckermannSteeredVehicle(Vehicle):
 		dy = vx * torch.sin(state['theta'])
 		dtheta = (vx/self.length) * torch.tan(phi)
 
-		return torch.tensor([dx, dy, dtheta])
+		return torch.stack([dx, dy, dtheta], dim=-1)
 		
