@@ -44,7 +44,7 @@ frame = 0
 #import pdb;pdb.set_trace()
 while True:
 	print('Frame {}'.format(frame), end='\r')
-	env.wrapped_env.render(window=50)
+	env.render(render_kwargs = {'window':50})
 	plt.savefig(os.path.join(tmp_fp, 'frame{0:05d}.png'.format(frame)))
 	plt.close()
 	#o, r, t, i = env.step(policy.action(o, deterministic=args.deterministic))
